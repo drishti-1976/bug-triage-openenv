@@ -1,0 +1,70 @@
+name: bug-triage-openenv
+version: "1.0.0"
+description: >
+  A real-world GitHub issue triage environment where AI agents must label,
+  prioritize, assign, close, and request information for software bug reports.
+  Simulates the daily workflow of an engineering team's issue tracker with
+  dynamic issue generation, reporter reputation tracking, and security escalation.
+
+author: your-name
+license: MIT
+tags: [openenv, bug-triage, github, software-engineering, real-world]
+
+tasks:
+  - id: task_1_easy
+    name: Basic Issue Labelling
+    difficulty: easy
+    max_steps: 10
+    score_range: [0.0, 1.0]
+
+  - id: task_2_medium
+    name: Triage with Priority and Team Assignment
+    difficulty: medium
+    max_steps: 20
+    score_range: [0.0, 1.0]
+
+  - id: task_3_hard
+    name: Full Bug Triage
+    difficulty: hard
+    max_steps: 35
+    score_range: [0.0, 1.0]
+
+observation_space:
+  type: object
+  fields:
+    current_issue: GitHubIssue object or null
+    inbox_size: integer
+    issues_processed: integer
+    current_task_id: string
+    task_description: string
+    available_actions: list of strings
+    step_budget_remaining: integer
+    reporter_history: dict of author to reputation
+
+action_space:
+  type: object
+  fields:
+    action_type: "label | prioritize | assign | close | request_info | skip"
+    label: "bug | feature | question | duplicate | wontfix | security (optional)"
+    priority: "critical | high | medium | low (optional)"
+    team: "backend | frontend | devops | security | docs (optional)"
+    close_reason: "duplicate | invalid | wontfix | resolved (optional)"
+    request_text: "string asking for more info (optional)"
+    issue_id: "string (optional)"
+
+reward:
+  type: float
+  range: [0.0, 1.0]
+  description: >
+    Partial credit per action. Bonuses for correctly escalating security issues.
+    Penalties for wrong closes, unnecessary assignments, and repeated actions.
+
+endpoints:
+  reset:    POST /reset?task_id={task_id}
+  step:     POST /step
+  state:    GET  /state
+  tasks:    GET  /tasks
+  grader:   GET  /grader
+  baseline: GET  /baseline
+  validate: GET  /validate
+  health:   GET  /health
