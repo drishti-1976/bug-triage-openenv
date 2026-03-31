@@ -1,3 +1,15 @@
+---
+title: Bug Triage Env
+emoji: 🏢
+colorFrom: pink
+colorTo: indigo
+sdk: docker
+pinned: false
+license: mit
+---
+
+Check out the configuration reference at https://huggingface.co/docs/hub/spaces-config-reference
+
 # Bug Triage OpenEnv
 
 A real-world OpenEnv environment where AI agents triage GitHub issues —
