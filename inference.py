@@ -8,7 +8,7 @@ from openai import OpenAI
 
 # ── Required env vars (as specified in problem statement) ─────────────────────
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-MODEL_NAME   = os.getenv("MODEL_NAME",   "meta-llama/Llama-3.1-8B-Instruct")
+MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
 HF_TOKEN     = os.getenv("HF_TOKEN")     or os.getenv("API_KEY")
 ENV_BASE_URL = os.getenv("ENV_BASE_URL", "https://drishti1976-bug-triage-env.hf.space")
 

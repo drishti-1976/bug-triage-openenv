@@ -12,6 +12,7 @@ EXPOSE 7860
 
 ENV PYTHONPATH=/app
 ENV API_BASE_URL=https://router.huggingface.co/v1
-ENV MODEL_NAME=meta-llama/Llama-3.1-8B-Instruct
+ENV MODEL_NAME=Qwen/Qwen2.5-72B-Instruct
+ENV ENABLE_WEB_INTERFACE=true
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "7860"]

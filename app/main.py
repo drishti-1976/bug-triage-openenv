@@ -2,6 +2,9 @@ from fastapi import FastAPI, HTTPException
 from app.environment import BugTriageEnv
 from app.models import Action
 from app.tasks import TASKS, GRADERS, make_tasks
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+import os
 
 app = FastAPI(
     title       = "Bug Triage OpenEnv",
@@ -13,6 +16,13 @@ app = FastAPI(
 )
 
 env = BugTriageEnv()
+if os.path.exists("static"):
+    app.mount("/static", StaticFiles(directory="static"), name="static")
+
+
+@app.get("/ui")
+def ui():
+    return FileResponse("static/index.html")
 
 
 @app.get("/")

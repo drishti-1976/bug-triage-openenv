@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Bug Triage OpenEnv</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; color: #e1e4e8; min-height: 100vh; }
+  .header { background: #161b22; border-bottom: 1px solid #30363d; padding: 16px 32px; display: flex; align-items: center; gap: 12px; }
+  .header h1 { font-size: 20px; font-weight: 600; color: #f0f6fc; }
+  .badge { background: #1f6feb; color: #fff; font-size: 11px; padding: 2px 8px; border-radius: 12px; font-weight: 500; }
+  .container { max-width: 1100px; margin: 0 auto; padding: 24px; }
+  .tasks-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 24px; }
+  .task-card { background: #161b22; border: 2px solid #30363d; border-radius: 12px; padding: 20px; cursor: pointer; transition: all 0.2s; }
+  .task-card:hover { border-color: #58a6ff; transform: translateY(-2px); }
+  .task-card.active { border-color: #58a6ff; background: #1c2d3f; }
+  .task-card .difficulty { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+  .easy { color: #3fb950; }
+  .medium { color: #d29922; }
+  .hard { color: #f85149; }
+  .task-card h3 { font-size: 15px; font-weight: 600; color: #f0f6fc; margin-bottom: 6px; }
+  .task-card p { font-size: 12px; color: #8b949e; line-height: 1.5; }
+  .task-card .meta { display: flex; gap: 12px; margin-top: 12px; }
+  .task-card .meta span { font-size: 11px; color: #58a6ff; background: #1f2d3d; padding: 2px 8px; border-radius: 6px; }
+  .main-grid { display: grid; grid-template-columns: 1fr 380px; gap: 20px; }
+  .panel { background: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 20px; }
+  .panel h2 { font-size: 14px; font-weight: 600; color: #8b949e; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 16px; }
+  .issue-header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .issue-number { color: #58a6ff; font-size: 13px; font-weight: 600; }
+  .issue-title { font-size: 17px; font-weight: 600; color: #f0f6fc; flex: 1; }
+  .issue-body { color: #c9d1d9; font-size: 13px; line-height: 1.7; background: #0d1117; border-radius: 8px; padding: 14px; margin-bottom: 14px; white-space: pre-wrap; }
+  .issue-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+  .tag { font-size: 11px; padding: 3px 10px; border-radius: 12px; font-weight: 500; }
+  .tag-blue { background: #1f3a5c; color: #79c0ff; }
+  .tag-green { background: #1a3a2a; color: #56d364; }
+  .tag-red { background: #3a1a1a; color: #ff7b72; }
+  .tag-gray { background: #2a2a2a; color: #8b949e; }
+  .actions-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .action-btn { background: #21262d; border: 1px solid #30363d; color: #c9d1d9; padding: 12px 16px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 500; transition: all 0.2s; text-align: left; }
+  .action-btn:hover { background: #30363d; border-color: #58a6ff; color: #f0f6fc; }
+  .action-btn .btn-label { font-size: 11px; color: #8b949e; display: block; margin-bottom: 4px; }
+  .action-btn select, .action-btn input { width: 100%; background: #0d1117; border: 1px solid #30363d; color: #c9d1d9; padding: 6px 8px; border-radius: 6px; font-size: 12px; margin-top: 6px; }
+  .action-btn textarea { width: 100%; background: #0d1117; border: 1px solid #30363d; color: #c9d1d9; padding: 6px 8px; border-radius: 6px; font-size: 12px; margin-top: 6px; resize: none; height: 60px; }
+  .submit-btn { grid-column: 1/-1; background: #1f6feb; color: #fff; border: none; padding: 12px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; transition: background 0.2s; }
+  .submit-btn:hover { background: #388bfd; }
+  .submit-btn:disabled { background: #30363d; color: #8b949e; cursor: not-allowed; }
+  .progress-bar { background: #21262d; border-radius: 8px; height: 8px; margin-bottom: 16px; overflow: hidden; }
+  .progress-fill { background: linear-gradient(90deg, #1f6feb, #58a6ff); height: 100%; border-radius: 8px; transition: width 0.4s; }
+  .score-display { text-align: center; padding: 20px; }
+  .score-number { font-size: 48px; font-weight: 700; color: #58a6ff; line-height: 1; }
+  .score-label { font-size: 12px; color: #8b949e; margin-top: 4px; }
+  .reward-feed { max-height: 200px; overflow-y: auto; }
+  .reward-item { padding: 8px 12px; border-radius: 6px; margin-bottom: 6px; font-size: 12px; border-left: 3px solid; }
+  .reward-pos { background: #1a3a2a; border-color: #3fb950; color: #56d364; }
+  .reward-neg { background: #3a1a1a; border-color: #f85149; color: #ff7b72; }
+  .reward-neu { background: #1f2d3d; border-color: #58a6ff; color: #79c0ff; }
+  .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
+  .stat-box { background: #0d1117; border-radius: 8px; padding: 12px; text-align: center; }
+  .stat-num { font-size: 24px; font-weight: 700; color: #f0f6fc; }
+  .stat-lbl { font-size: 11px; color: #8b949e; margin-top: 2px; }
+  .done-banner { background: #1a3a2a; border: 1px solid #3fb950; border-radius: 10px; padding: 20px; text-align: center; margin-bottom: 16px; }
+  .done-banner h3 { color: #56d364; font-size: 18px; margin-bottom: 8px; }
+  .done-banner p { color: #8b949e; font-size: 13px; }
+  .reset-btn { width: 100%; background: #21262d; border: 1px solid #30363d; color: #c9d1d9; padding: 10px; border-radius: 8px; font-size: 13px; cursor: pointer; margin-top: 10px; transition: all 0.2s; }
+  .reset-btn:hover { background: #30363d; }
+  .loading { text-align: center; padding: 40px; color: #8b949e; }
+  .spinner { display: inline-block; width: 24px; height: 24px; border: 3px solid #30363d; border-top-color: #58a6ff; border-radius: 50%; animation: spin 0.8s linear infinite; margin-bottom: 12px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .empty-state { text-align: center; padding: 40px; color: #8b949e; }
+  .empty-state h3 { font-size: 16px; color: #f0f6fc; margin-bottom: 8px; }
+  .all-scores { margin-top: 16px; }
+  .score-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #0d1117; border-radius: 6px; margin-bottom: 6px; }
+  .score-row .name { font-size: 12px; color: #8b949e; }
+  .score-row .val { font-size: 14px; font-weight: 600; color: #58a6ff; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#58a6ff" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4m0 4h.01"/></svg>
+  <h1>Bug Triage OpenEnv</h1>
+  <span class="badge">openenv</span>
+  <span class="badge" style="background:#3fb950">v1.0.0</span>
+</div>
+
+<div class="container">
+
+  <!-- Task selector -->
+  <div class="tasks-row" id="taskCards">
+    <div class="task-card" onclick="selectTask('task_1_easy')">
+      <div class="difficulty easy">Easy</div>
+      <h3>Basic Issue Labelling</h3>
+      <p>Label 5 GitHub issues correctly. Clear signals in title and body.</p>
+      <div class="meta"><span>5 issues</span><span>10 steps</span></div>
+    </div>
+    <div class="task-card" onclick="selectTask('task_2_medium')">
+      <div class="difficulty medium">Medium</div>
+      <h3>Priority + Team Assignment</h3>
+      <p>Label, prioritize, and assign 6 issues to the correct team.</p>
+      <div class="meta"><span>6 issues</span><span>20 steps</span></div>
+    </div>
+    <div class="task-card" onclick="selectTask('task_3_hard')">
+      <div class="difficulty hard">Hard</div>
+      <h3>Full Bug Triage</h3>
+      <p>Full triage: label, prioritize, assign, close duplicates, escalate security.</p>
+      <div class="meta"><span>8 issues</span><span>35 steps</span></div>
+    </div>
+  </div>
+
+  <!-- Main area -->
+  <div id="emptyState" class="empty-state">
+    <h3>Select a task above to start</h3>
+    <p>Choose Easy, Medium, or Hard to begin triaging GitHub issues</p>
+  </div>
+
+  <div id="mainGrid" class="main-grid" style="display:none">
+
+    <!-- Left: Issue + Actions -->
+    <div>
+      <div class="panel" id="issuePanel">
+        <h2>Current Issue</h2>
+        <div id="issueContent"><div class="loading"><div class="spinner"></div><br/>Loading...</div></div>
+      </div>
+    </div>
+
+    <!-- Right: Stats + Rewards -->
+    <div>
+      <div class="panel" style="margin-bottom:16px">
+        <h2>Episode Stats</h2>
+        <div class="stats-grid">
+          <div class="stat-box"><div class="stat-num" id="statStep">0</div><div class="stat-lbl">Steps taken</div></div>
+          <div class="stat-box"><div class="stat-num" id="statRemaining">—</div><div class="stat-lbl">Issues left</div></div>
+          <div class="stat-box"><div class="stat-num" id="statBudget">—</div><div class="stat-lbl">Step budget</div></div>
+          <div class="stat-box"><div class="stat-num" id="statTotal">0.0</div><div class="stat-lbl">Total reward</div></div>
+        </div>
+        <div class="progress-bar"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
+        <div id="graderScore" class="score-display" style="display:none">
+          <div class="score-number" id="scoreNum">0.0</div>
+          <div class="score-label">Grader score</div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Reward Feed</h2>
+        <div class="reward-feed" id="rewardFeed">
+          <div style="color:#8b949e;font-size:12px;text-align:center;padding:20px">Actions will appear here</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+const BASE = "";
+let currentTask = null;
+let currentObs  = null;
+let episodeDone = false;
+let stepCount   = 0;
+let totalReward = 0;
+
+function selectTask(taskId) {
+  currentTask = taskId;
+  document.querySelectorAll('.task-card').forEach((c,i) => {
+    const ids = ['task_1_easy','task_2_medium','task_3_hard'];
+    c.classList.toggle('active', ids[i] === taskId);
+  });
+  document.getElementById('emptyState').style.display = 'none';
+  document.getElementById('mainGrid').style.display   = 'grid';
+  resetEpisode();
+}
+
+async function resetEpisode() {
+  episodeDone = false;
+  stepCount   = 0;
+  totalReward = 0;
+  document.getElementById('rewardFeed').innerHTML = '<div style="color:#8b949e;font-size:12px;text-align:center;padding:20px">Actions will appear here</div>';
+  document.getElementById('graderScore').style.display = 'none';
+  document.getElementById('issueContent').innerHTML = '<div class="loading"><div class="spinner"></div><br/>Resetting...</div>';
+  updateStats(0, '—', '—', 0);
+
+  const r = await fetch(`${BASE}/reset?task_id=${currentTask}`, {method:'POST'});
+  currentObs = await r.json();
+  renderIssue();
+}
+
+function renderIssue() {
+  const issue = currentObs?.current_issue;
+  const budget = currentObs?.step_budget_remaining ?? '—';
+  const processed = currentObs?.issues_processed ?? 0;
+  const total = currentObs?.inbox_size ?? 0;
+  const remaining = total - processed;
+
+  updateStats(stepCount, remaining, budget, totalReward);
+
+  if (episodeDone || !issue) {
+    showDone();
+    return;
+  }
+
+  const html = `
+    <div class="issue-header">
+      <span class="issue-number">#${issue.number}</span>
+      <span class="issue-title">${escHtml(issue.title)}</span>
+    </div>
+    <div class="issue-meta">
+      <span class="tag tag-blue">repo: ${escHtml(issue.repository)}</span>
+      <span class="tag ${reputationClass(issue.author_reputation)}">${escHtml(issue.author_reputation)}</span>
+      ${issue.has_stacktrace ? '<span class="tag tag-green">has stacktrace</span>' : '<span class="tag tag-gray">no stacktrace</span>'}
+      ${issue.has_reproduction_steps ? '<span class="tag tag-green">has repro steps</span>' : '<span class="tag tag-gray">no repro steps</span>'}
+      <span class="tag tag-gray">${escHtml(issue.author)}</span>
+    </div>
+    <div class="issue-body">${escHtml(issue.body)}</div>
+    <div class="actions-grid">
+      <div class="action-btn">
+        <span class="btn-label">Label</span>
+        <select id="labelSel">
+          <option value="">— choose —</option>
+          <option>bug</option><option>feature</option>
+          <option>question</option><option>duplicate</option><option>security</option>
+        </select>
+      </div>
+      <div class="action-btn">
+        <span class="btn-label">Priority</span>
+        <select id="priSel">
+          <option value="">— choose —</option>
+          <option>critical</option><option>high</option>
+          <option>medium</option><option>low</option>
+        </select>
+      </div>
+      <div class="action-btn">
+        <span class="btn-label">Assign team</span>
+        <select id="teamSel">
+          <option value="">— choose —</option>
+          <option>backend</option><option>frontend</option>
+          <option>devops</option><option>security</option><option>docs</option>
+        </select>
+      </div>
+      <div class="action-btn">
+        <span class="btn-label">Close reason</span>
+        <select id="closeSel">
+          <option value="">— none —</option>
+          <option>duplicate</option><option>invalid</option><option>wontfix</option>
+        </select>
+      </div>
+      <div class="action-btn" style="grid-column:1/-1">
+        <span class="btn-label">Request info (leave blank to skip)</span>
+        <textarea id="requestText" placeholder="Ask reporter for reproduction steps, env details..."></textarea>
+      </div>
+      <button class="submit-btn" onclick="submitAction('${issue.id}')">Submit Triage Action</button>
+      <button class="action-btn" style="text-align:center" onclick="skipIssue('${issue.id}')">Skip this issue</button>
+    </div>
+  `;
+  document.getElementById('issueContent').innerHTML = html;
+}
+
+async function submitAction(issueId) {
+  const label       = document.getElementById('labelSel')?.value;
+  const priority    = document.getElementById('priSel')?.value;
+  const team        = document.getElementById('teamSel')?.value;
+  const closeReason = document.getElementById('closeSel')?.value;
+  const requestText = document.getElementById('requestText')?.value?.trim();
+
+  let actionType = 'label';
+  if (closeReason)  actionType = 'close';
+  else if (requestText) actionType = 'request_info';
+  else if (label)   actionType = 'label';
+  else if (priority) actionType = 'prioritize';
+  else if (team)    actionType = 'assign';
+
+  const action = { action_type: actionType, issue_id: issueId };
+  if (label)        action.label        = label;
+  if (priority)     action.priority     = priority;
+  if (team)         action.team         = team;
+  if (closeReason)  action.close_reason = closeReason;
+  if (requestText)  action.request_text = requestText;
+
+  await doStep(action);
+}
+
+async function skipIssue(issueId) {
+  await doStep({ action_type: 'skip', issue_id: issueId });
+}
+
+async function doStep(action) {
+  document.querySelector('.submit-btn') && (document.querySelector('.submit-btn').disabled = true);
+  const r    = await fetch(`${BASE}/step`, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(action)
+  });
+  const result = await r.json();
+  currentObs   = result.observation;
+  episodeDone  = result.done;
+  stepCount++;
+  totalReward += result.reward?.value || 0;
+
+  addRewardItem(result.reward, action);
+  updateProgress();
+
+  if (episodeDone) {
+    await fetchGrade();
+    showDone();
+  } else {
+    renderIssue();
+  }
+}
+
+async function fetchGrade() {
+  const r = await fetch(`${BASE}/grader`);
+  const g = await r.json();
+  document.getElementById('scoreNum').textContent = (g.grader_score || 0).toFixed(3);
+  document.getElementById('graderScore').style.display = 'block';
+}
+
+function showDone() {
+  const inbox = currentObs?.inbox_size || 0;
+  document.getElementById('issueContent').innerHTML = `
+    <div class="done-banner">
+      <h3>Episode Complete</h3>
+      <p>Processed ${inbox} issues · ${stepCount} steps taken</p>
+    </div>
+    <div class="all-scores">
+      <div class="score-row"><span class="name">Total reward accumulated</span><span class="val">${totalReward.toFixed(3)}</span></div>
+    </div>
+    <button class="reset-btn" onclick="resetEpisode()">Run Again</button>
+    <button class="reset-btn" style="margin-top:8px;color:#58a6ff;border-color:#1f6feb" onclick="switchTask()">Try Another Task</button>
+  `;
+  fetchGrade();
+}
+
+function switchTask() {
+  document.getElementById('mainGrid').style.display = 'none';
+  document.getElementById('emptyState').style.display = 'block';
+  document.querySelectorAll('.task-card').forEach(c => c.classList.remove('active'));
+}
+
+function addRewardItem(reward, action) {
+  const feed = document.getElementById('rewardFeed');
+  if (feed.querySelector('[data-placeholder]')) feed.innerHTML = '';
+  const val  = reward?.value || 0;
+  const cls  = val > 0.1 ? 'reward-pos' : val < 0 ? 'reward-neg' : 'reward-neu';
+  const sign = val > 0 ? '+' : '';
+  const div  = document.createElement('div');
+  div.className = `reward-item ${cls}`;
+  div.innerHTML = `<strong>${sign}${val.toFixed(3)}</strong> — ${action.action_type}${action.label ? ': '+action.label : ''}${action.priority ? ' / '+action.priority : ''}<br><small style="opacity:0.7">${reward?.reason?.split('.')[0] || ''}</small>`;
+  feed.insertBefore(div, feed.firstChild);
+}
+
+function updateStats(steps, remaining, budget, reward) {
+  document.getElementById('statStep').textContent      = steps;
+  document.getElementById('statRemaining').textContent = remaining;
+  document.getElementById('statBudget').textContent    = budget;
+  document.getElementById('statTotal').textContent     = (reward||0).toFixed(2);
+}
+
+function updateProgress() {
+  const obs   = currentObs;
+  const done  = obs?.issues_processed || 0;
+  const total = obs?.inbox_size || 1;
+  const pct   = Math.round((done / total) * 100);
+  document.getElementById('progressFill').style.width = pct + '%';
+  updateStats(stepCount, total - done, obs?.step_budget_remaining, totalReward);
+}
+
+function reputationClass(rep) {
+  if (rep === 'trusted') return 'tag-green';
+  if (rep === 'new')     return 'tag-blue';
+  return 'tag-gray';
+}
+
+function escHtml(str) {
+  return String(str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+</script>
+</body>
+</html>
