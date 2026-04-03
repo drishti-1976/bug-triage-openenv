@@ -1,37 +1,34 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from app.environment import BugTriageEnv
 from app.models import Action
 from app.tasks import TASKS, GRADERS, make_tasks
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
 import os
 
 app = FastAPI(
-    title       = "Bug Triage OpenEnv",
-    description = "Real-world GitHub issue triage environment for AI agents",
-    version     = "1.0.0",
-    docs_url="/docs",         
-    redoc_url="/redoc",        
-    openapi_url="/openapi.json"
+    title="Bug Triage OpenEnv",
+    description="Real-world GitHub issue triage environment for AI agents",
+    version="1.0.0",
 )
 
 env = BugTriageEnv()
+
+# Serve static files
 if os.path.exists("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
-@app.get("/ui")
-def ui():
-    return FileResponse("static/index.html")
-
-
 @app.get("/")
 def root():
-    return {
-        "status":  "ok",
-        "env":     "bug-triage-openenv",
-        "version": "1.0.0",
-    }
+    if os.path.exists("static/index.html"):
+        return FileResponse("static/index.html")
+    return {"status": "ok", "env": "bug-triage-openenv", "version": "1.0.0"}
+
+
+@app.get("/api")
+def api_root():
+    return {"status": "ok", "env": "bug-triage-openenv", "version": "1.0.0"}
 
 
 @app.get("/health")
@@ -67,23 +64,23 @@ def list_tasks():
     fresh = make_tasks()
     tasks_info = [
         {
-            "id":          tid,
-            "name":        task["name"],
-            "description": task["description"],
-            "difficulty":  task["difficulty"],
-            "max_steps":   task["max_steps"],
-            "num_issues":  len(task["issues"]),
+            "id":         tid,
+            "name":       task["name"],
+            "description":task["description"],
+            "difficulty": task["difficulty"],
+            "max_steps":  task["max_steps"],
+            "num_issues": len(task["issues"]),
         }
         for tid, task in fresh.items()
     ]
     action_schema = {
-        "action_type":   "string — one of: label, prioritize, assign, close, request_info, skip",
-        "label":         "string (optional) — bug | feature | question | duplicate | wontfix | security",
-        "priority":      "string (optional) — critical | high | medium | low",
-        "team":          "string (optional) — backend | frontend | devops | security | docs",
-        "close_reason":  "string (optional) — duplicate | invalid | wontfix | resolved",
-        "request_text":  "string (optional) — message asking reporter for more details",
-        "issue_id":      "string (optional) — id of the issue being acted on",
+        "action_type":  "string — one of: label, prioritize, assign, close, request_info, skip",
+        "label":        "string (optional) — bug | feature | question | duplicate | wontfix | security",
+        "priority":     "string (optional) — critical | high | medium | low",
+        "team":         "string (optional) — backend | frontend | devops | security | docs",
+        "close_reason": "string (optional) — duplicate | invalid | wontfix | resolved",
+        "request_text": "string (optional) — message asking reporter for more details",
+        "issue_id":     "string (optional) — id of the issue being acted on",
     }
     return {"tasks": tasks_info, "action_schema": action_schema}
 
@@ -92,31 +89,26 @@ def list_tasks():
 def grader():
     score = env.grade()
     return {
-        "task_id":       env.task_id,
-        "grader_score":  score,
-        "episode_done":  env.done,
-        "action_count":  len(env.action_history),
+        "task_id":      env.task_id,
+        "grader_score": score,
+        "episode_done": env.done,
+        "action_count": len(env.action_history),
     }
 
 
 @app.get("/baseline")
 def baseline():
-    """Rule-based keyword agent — runs inline, no subprocess, no deadlock."""
-
     def rule_agent(issue: dict) -> dict:
         text = (
             issue["title"] + " " + issue["body"] + " " + issue["author"]
         ).lower()
 
-        # Detect label
         if any(w in text for w in ["sql injection", "xss", "vulnerability",
                                     "security", "exploit", "proof of concept"]):
             label, priority, team = "security", "critical", "security"
         elif any(w in text for w in ["crash", "error", "exception", "broken",
                                       "not working", "bug", "null", "fail"]):
-            label    = "bug"
-            priority = "high"
-            team     = "backend"
+            label, priority, team = "bug", "high", "backend"
         elif any(w in text for w in ["feature request", "add support", "would be great",
                                       "please add", "export", "enhancement"]):
             label, priority, team = "feature", "medium", "backend"
@@ -139,7 +131,6 @@ def baseline():
         if label == "duplicate":
             action["action_type"] = "close"
             action["close_reason"] = "duplicate"
-        # request info for vague issues
         if not issue["has_reproduction_steps"] and not issue["has_stacktrace"] \
                 and label not in ("feature", "question", "duplicate"):
             action["action_type"] = "request_info"
@@ -170,7 +161,6 @@ def baseline():
 
 @app.get("/validate")
 def validate():
-    """OpenEnv spec compliance check."""
     return {
         "name":      "bug-triage-openenv",
         "version":   "1.0.0",
