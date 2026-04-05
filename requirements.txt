@@ -8,4 +8,3 @@ python-dotenv==1.0.1
 openenv>=0.1.0
 pytest>=8.0.0
 aiofiles==23.2.1
-gradio==4.44.0
