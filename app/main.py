@@ -338,13 +338,16 @@ function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;'
 
 @app.get("/")
 def root():
-    return HTMLResponse(content=HTML)
+    return {"status": "ok", "env": "bug-triage-openenv", "version": "1.0.0"}
 
 
 @app.get("/api")
 def api_root():
     return {"status": "ok", "env": "bug-triage-openenv", "version": "1.0.0"}
 
+@app.get("/web")
+def web():
+    return HTMLResponse(content=HTML)
 
 @app.get("/health")
 def health():
