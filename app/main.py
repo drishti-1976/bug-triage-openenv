@@ -3,6 +3,9 @@ from fastapi.responses import HTMLResponse
 from app.environment import BugTriageEnv
 from app.models import Action
 from app.tasks import TASKS, GRADERS, make_tasks
+import gradio as gr
+import httpx
+import json
 import os
 
 app = FastAPI(
@@ -89,7 +92,6 @@ HTML = """<!DOCTYPE html>
   <span class="badge">openenv</span>
   <span class="badge2">v1.0.0</span>
 </div>
-
 <div class="container">
   <div class="tasks-row">
     <div class="task-card" id="card_task_1_easy" onclick="selectTask('task_1_easy')">
@@ -111,12 +113,10 @@ HTML = """<!DOCTYPE html>
       <div class="task-meta"><span>8 issues</span><span>35 steps</span></div>
     </div>
   </div>
-
   <div id="emptyState" class="empty-state">
     <h3>Select a task above to begin</h3>
     <p>Choose Easy, Medium, or Hard to start triaging GitHub issues</p>
   </div>
-
   <div id="mainGrid" class="main-grid" style="display:none">
     <div>
       <div class="panel">
@@ -146,207 +146,226 @@ HTML = """<!DOCTYPE html>
     </div>
   </div>
 </div>
-
 <script>
-let task = null, obs = null, done = false, steps = 0, totalR = 0;
-
-function selectTask(id) {
-  task = id;
-  ['task_1_easy','task_2_medium','task_3_hard'].forEach(t => {
-    document.getElementById('card_'+t).classList.toggle('active', t===id);
-  });
-  document.getElementById('emptyState').style.display = 'none';
-  document.getElementById('mainGrid').style.display = 'grid';
-  startEpisode();
-}
-
-async function startEpisode() {
-  done=false; steps=0; totalR=0;
-  document.getElementById('feed').innerHTML = '<div style="color:#8b949e;font-size:12px;text-align:center;padding:16px">Actions will appear here</div>';
-  document.getElementById('scoreBox').style.display = 'none';
-  setStats(0,'—','—',0); setProgress(0,1);
-  setIssue('<div style="text-align:center;padding:30px"><div class="spinner"></div><p style="color:#8b949e;margin-top:12px">Resetting...</p></div>');
-  const r = await fetch('/reset?task_id='+task, {method:'POST'});
-  obs = await r.json();
-  renderIssue();
-}
-
-function renderIssue() {
-  const issue = obs?.current_issue;
-  const budget = obs?.step_budget_remaining ?? '—';
-  const processed = obs?.issues_processed ?? 0;
-  const total = obs?.inbox_size ?? 0;
-  setStats(steps, total-processed, budget, totalR);
-  setProgress(processed, total);
-  if (done || !issue) { showDone(); return; }
-
-  setIssue(`
-    <div style="margin-bottom:12px">
-      <span class="issue-number">#${issue.number}</span>
-      <span class="issue-title">${esc(issue.title)}</span>
-    </div>
-    <div class="tags">
-      <span class="tag tag-blue">${esc(issue.repository)}</span>
-      <span class="tag ${repClass(issue.author_reputation)}">${esc(issue.author_reputation)}</span>
-      ${issue.has_stacktrace?'<span class="tag tag-green">stacktrace</span>':'<span class="tag tag-gray">no stacktrace</span>'}
-      ${issue.has_reproduction_steps?'<span class="tag tag-green">repro steps</span>':'<span class="tag tag-gray">no repro steps</span>'}
-      <span class="tag tag-gray">${esc(issue.author)}</span>
-    </div>
-    <div class="issue-body">${esc(issue.body)}</div>
-    <div class="actions-grid">
-      <div class="field-box">
-        <label>Label</label>
-        <select id="selLabel">
-          <option value="">— choose —</option>
-          <option>bug</option><option>feature</option>
-          <option>question</option><option>duplicate</option><option>security</option>
-        </select>
-      </div>
-      <div class="field-box">
-        <label>Priority</label>
-        <select id="selPri">
-          <option value="">— choose —</option>
-          <option>critical</option><option>high</option><option>medium</option><option>low</option>
-        </select>
-      </div>
-      <div class="field-box">
-        <label>Assign team</label>
-        <select id="selTeam">
-          <option value="">— none —</option>
-          <option>backend</option><option>frontend</option>
-          <option>devops</option><option>security</option><option>docs</option>
-        </select>
-      </div>
-      <div class="field-box">
-        <label>Close reason</label>
-        <select id="selClose">
-          <option value="">— none —</option>
-          <option>duplicate</option><option>invalid</option><option>wontfix</option>
-        </select>
-      </div>
-      <div class="field-box" style="grid-column:1/-1">
-        <label>Request info (optional)</label>
-        <textarea id="txtReq" placeholder="Ask reporter for reproduction steps, env details..."></textarea>
-      </div>
-      <button class="btn-primary" id="submitBtn" onclick="submitAction('${issue.id}')">Submit Triage Action</button>
-    </div>
-    <button class="btn-secondary" onclick="skipAction('${issue.id}')">Skip this issue</button>
-  `);
-}
-
-async function submitAction(issueId) {
-  const label    = document.getElementById('selLabel')?.value;
-  const priority = document.getElementById('selPri')?.value;
-  const team     = document.getElementById('selTeam')?.value;
-  const closeR   = document.getElementById('selClose')?.value;
-  const reqText  = document.getElementById('txtReq')?.value?.trim();
-
-  let actionType = 'label';
-  if (closeR)   actionType = 'close';
-  else if (reqText) actionType = 'request_info';
-  else if (label)   actionType = 'label';
-  else if (priority) actionType = 'prioritize';
-  else if (team)    actionType = 'assign';
-
-  const action = {action_type: actionType, issue_id: issueId};
-  if (label)    action.label        = label;
-  if (priority) action.priority     = priority;
-  if (team)     action.team         = team;
-  if (closeR)   action.close_reason = closeR;
-  if (reqText)  action.request_text = reqText;
-
-  document.getElementById('submitBtn').disabled = true;
-  await doStep(action);
-}
-
-async function skipAction(issueId) {
-  await doStep({action_type:'skip', issue_id: issueId});
-}
-
-async function doStep(action) {
-  const r = await fetch('/step', {
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body: JSON.stringify(action)
-  });
-  const result = await r.json();
-  obs   = result.observation;
-  done  = result.done;
-  steps++;
-  totalR += result.reward?.value || 0;
-  addFeed(result.reward, action);
-  if (done) { await loadGrade(); showDone(); }
-  else renderIssue();
-}
-
-async function loadGrade() {
-  const r = await fetch('/grader');
-  const g = await r.json();
-  document.getElementById('scoreNum').textContent = (g.grader_score||0).toFixed(3);
-  document.getElementById('scoreBox').style.display = 'block';
-}
-
-function showDone() {
-  const total = obs?.inbox_size || 0;
-  setIssue(`
-    <div class="done-box">
-      <h3>Episode Complete</h3>
-      <p>Processed ${total} issues in ${steps} steps</p>
-      <p style="margin-top:8px">Total reward: ${totalR.toFixed(3)}</p>
-    </div>
-    <button class="btn-secondary" style="margin-top:12px" onclick="startEpisode()">Run Again</button>
-    <button class="btn-secondary" style="margin-top:8px;color:#58a6ff" onclick="backToTasks()">Try Another Task</button>
-  `);
-  loadGrade();
-}
-
-function backToTasks() {
-  document.getElementById('mainGrid').style.display = 'none';
-  document.getElementById('emptyState').style.display = 'block';
-  document.querySelectorAll('.task-card').forEach(c => c.classList.remove('active'));
-}
-
-function addFeed(reward, action) {
-  const feed = document.getElementById('feed');
-  if (feed.querySelector('[data-ph]')) feed.innerHTML = '';
-  const val = reward?.value || 0;
-  const cls = val > 0.1 ? 'feed-pos' : val < 0 ? 'feed-neg' : 'feed-neu';
-  const sign = val >= 0 ? '+' : '';
-  const d = document.createElement('div');
-  d.className = 'feed-item ' + cls;
-  d.innerHTML = `<strong>${sign}${val.toFixed(3)}</strong> — ${action.action_type}${action.label?': '+action.label:''}${action.priority?' / '+action.priority:''}`;
-  feed.insertBefore(d, feed.firstChild);
-}
-
-function setIssue(html) { document.getElementById('issueContent').innerHTML = html; }
-function setStats(s,l,b,r) {
-  document.getElementById('statStep').textContent   = s;
-  document.getElementById('statLeft').textContent   = l;
-  document.getElementById('statBudget').textContent = b;
-  document.getElementById('statReward').textContent = (r||0).toFixed(2);
-}
-function setProgress(done, total) {
-  const pct = total > 0 ? Math.round((done/total)*100) : 0;
-  document.getElementById('progFill').style.width = pct+'%';
-}
-function repClass(r) { return r==='trusted'?'tag-green':r==='new'?'tag-blue':'tag-gray'; }
-function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+let task=null,obs=null,done=false,steps=0,totalR=0;
+function selectTask(id){task=id;['task_1_easy','task_2_medium','task_3_hard'].forEach(t=>{document.getElementById('card_'+t).classList.toggle('active',t===id)});document.getElementById('emptyState').style.display='none';document.getElementById('mainGrid').style.display='grid';startEpisode()}
+async function startEpisode(){done=false;steps=0;totalR=0;document.getElementById('feed').innerHTML='<div style="color:#8b949e;font-size:12px;text-align:center;padding:16px">Actions will appear here</div>';document.getElementById('scoreBox').style.display='none';setStats(0,'—','—',0);setProgress(0,1);setIssue('<div style="text-align:center;padding:30px"><div class="spinner"></div><p style="color:#8b949e;margin-top:12px">Resetting...</p></div>');const r=await fetch('/reset?task_id='+task,{method:'POST'});obs=await r.json();renderIssue()}
+function renderIssue(){const issue=obs?.current_issue;const budget=obs?.step_budget_remaining??'—';const processed=obs?.issues_processed??0;const total=obs?.inbox_size??0;setStats(steps,total-processed,budget,totalR);setProgress(processed,total);if(done||!issue){showDone();return}setIssue(`<div style="margin-bottom:12px"><span class="issue-number">#${issue.number}</span><span class="issue-title">${esc(issue.title)}</span></div><div class="tags"><span class="tag tag-blue">${esc(issue.repository)}</span><span class="tag ${repClass(issue.author_reputation)}">${esc(issue.author_reputation)}</span>${issue.has_stacktrace?'<span class="tag tag-green">stacktrace</span>':'<span class="tag tag-gray">no stacktrace</span>'}${issue.has_reproduction_steps?'<span class="tag tag-green">repro steps</span>':'<span class="tag tag-gray">no repro steps</span>'}<span class="tag tag-gray">${esc(issue.author)}</span></div><div class="issue-body">${esc(issue.body)}</div><div class="actions-grid"><div class="field-box"><label>Label</label><select id="selLabel"><option value="">— choose —</option><option>bug</option><option>feature</option><option>question</option><option>duplicate</option><option>security</option></select></div><div class="field-box"><label>Priority</label><select id="selPri"><option value="">— choose —</option><option>critical</option><option>high</option><option>medium</option><option>low</option></select></div><div class="field-box"><label>Assign team</label><select id="selTeam"><option value="">— none —</option><option>backend</option><option>frontend</option><option>devops</option><option>security</option><option>docs</option></select></div><div class="field-box"><label>Close reason</label><select id="selClose"><option value="">— none —</option><option>duplicate</option><option>invalid</option><option>wontfix</option></select></div><div class="field-box" style="grid-column:1/-1"><label>Request info (optional)</label><textarea id="txtReq" placeholder="Ask reporter for reproduction steps..."></textarea></div><button class="btn-primary" id="submitBtn" onclick="submitAction('${issue.id}')">Submit Triage Action</button></div><button class="btn-secondary" onclick="skipAction('${issue.id}')">Skip this issue</button>`)}
+async function submitAction(issueId){const label=document.getElementById('selLabel')?.value;const priority=document.getElementById('selPri')?.value;const team=document.getElementById('selTeam')?.value;const closeR=document.getElementById('selClose')?.value;const reqText=document.getElementById('txtReq')?.value?.trim();let actionType='label';if(closeR)actionType='close';else if(reqText)actionType='request_info';else if(label)actionType='label';else if(priority)actionType='prioritize';else if(team)actionType='assign';const action={action_type:actionType,issue_id:issueId};if(label)action.label=label;if(priority)action.priority=priority;if(team)action.team=team;if(closeR)action.close_reason=closeR;if(reqText)action.request_text=reqText;document.getElementById('submitBtn').disabled=true;await doStep(action)}
+async function skipAction(issueId){await doStep({action_type:'skip',issue_id:issueId})}
+async function doStep(action){const r=await fetch('/step',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(action)});const result=await r.json();obs=result.observation;done=result.done;steps++;totalR+=result.reward?.value||0;addFeed(result.reward,action);if(done){await loadGrade();showDone()}else renderIssue()}
+async function loadGrade(){const r=await fetch('/grader');const g=await r.json();document.getElementById('scoreNum').textContent=(g.grader_score||0).toFixed(3);document.getElementById('scoreBox').style.display='block'}
+function showDone(){const total=obs?.inbox_size||0;setIssue(`<div class="done-box"><h3>Episode Complete</h3><p>Processed ${total} issues in ${steps} steps</p><p style="margin-top:8px">Total reward: ${totalR.toFixed(3)}</p></div><button class="btn-secondary" style="margin-top:12px" onclick="startEpisode()">Run Again</button><button class="btn-secondary" style="margin-top:8px;color:#58a6ff" onclick="backToTasks()">Try Another Task</button>`);loadGrade()}
+function backToTasks(){document.getElementById('mainGrid').style.display='none';document.getElementById('emptyState').style.display='block';document.querySelectorAll('.task-card').forEach(c=>c.classList.remove('active'))}
+function addFeed(reward,action){const feed=document.getElementById('feed');if(feed.querySelector('[data-ph]'))feed.innerHTML='';const val=reward?.value||0;const cls=val>0.1?'feed-pos':val<0?'feed-neg':'feed-neu';const sign=val>=0?'+':'';const d=document.createElement('div');d.className='feed-item '+cls;d.innerHTML=`<strong>${sign}${val.toFixed(3)}</strong> — ${action.action_type}${action.label?': '+action.label:''}${action.priority?' / '+action.priority:''}`;feed.insertBefore(d,feed.firstChild)}
+function setIssue(html){document.getElementById('issueContent').innerHTML=html}
+function setStats(s,l,b,r){document.getElementById('statStep').textContent=s;document.getElementById('statLeft').textContent=l;document.getElementById('statBudget').textContent=b;document.getElementById('statReward').textContent=(r||0).toFixed(2)}
+function setProgress(done,total){const pct=total>0?Math.round((done/total)*100):0;document.getElementById('progFill').style.width=pct+'%'}
+function repClass(r){return r==='trusted'?'tag-green':r==='new'?'tag-blue':'tag-gray'}
+function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 </script>
 </body>
 </html>"""
 
 
-@app.get("/")
-def root():
-    return HTMLResponse(content=HTML)
+# ── Gradio playground (shows in HF App tab) ───────────────────────────────────
+
+STEP_EXAMPLE = '''{
+  "action_type": "label",
+  "label": "bug",
+  "issue_id": "i1"
+}'''
+
+CONNECT_CODE = '''import httpx
+
+BASE = "https://drishti1976-bug-triage-env.hf.space"
+
+obs = httpx.post(f"{BASE}/reset", params={"task_id": "task_1_easy"}).json()
+result = httpx.post(f"{BASE}/step", json={
+    "action_type": "label",
+    "label": "bug",
+    "issue_id": obs["current_issue"]["id"]
+}).json()
+print(result["reward"])'''
+
+
+def gradio_reset(task_id):
+    try:
+        r = httpx.post(
+            "http://localhost:7860/reset",
+            params={"task_id": task_id},
+            timeout=30
+        )
+        return json.dumps(r.json(), indent=2)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+def gradio_step(action_json):
+    try:
+        action = json.loads(action_json)
+        r = httpx.post(
+            "http://localhost:7860/step",
+            json=action,
+            timeout=30
+        )
+        return json.dumps(r.json(), indent=2)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+def gradio_state():
+    try:
+        r = httpx.get("http://localhost:7860/state", timeout=30)
+        return json.dumps(r.json(), indent=2)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+def gradio_grader():
+    try:
+        r = httpx.get("http://localhost:7860/grader", timeout=30)
+        return json.dumps(r.json(), indent=2)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+def gradio_baseline():
+    try:
+        r = httpx.get("http://localhost:7860/baseline", timeout=60)
+        return json.dumps(r.json(), indent=2)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+with gr.Blocks(
+    title="Bug Triage OpenEnv",
+    theme=gr.themes.Base(primary_hue="green", neutral_hue="slate"),
+    css="footer{display:none!important}"
+) as demo:
+
+    gr.Markdown("# OpenEnv Agentic Environment: bug_triage_env")
+
+    with gr.Tabs():
+
+        with gr.Tab("Playground"):
+            gr.Markdown("### Click Reset to start a new episode.")
+            with gr.Row():
+                with gr.Column(scale=1):
+                    gr.Markdown("**Connect to this environment**")
+                    gr.Markdown("Connect directly to a running server:")
+                    gr.Code(value=CONNECT_CODE, language="python",
+                            label="Python client")
+                    gr.Markdown("**Available tasks:**")
+                    gr.Markdown(
+                        "- `task_1_easy` — Label 5 issues (Easy)\n"
+                        "- `task_2_medium` — Label + Priority + Team (Medium)\n"
+                        "- `task_3_hard` — Full triage (Hard)"
+                    )
+                    gr.Markdown("**Action types:**")
+                    gr.Markdown(
+                        "`label` · `prioritize` · `assign` · "
+                        "`close` · `request_info` · `skip`"
+                    )
+
+                with gr.Column(scale=2):
+                    gr.Markdown("### Playground")
+                    task_sel = gr.Dropdown(
+                        choices=["task_1_easy", "task_2_medium", "task_3_hard"],
+                        value="task_1_easy",
+                        label="Select Task",
+                    )
+                    action_in = gr.Textbox(
+                        label="Action JSON",
+                        value=STEP_EXAMPLE,
+                        lines=6,
+                    )
+                    with gr.Row():
+                        btn_step  = gr.Button("Step",      variant="primary")
+                        btn_reset = gr.Button("Reset",     variant="secondary")
+                        btn_state = gr.Button("Get state", variant="secondary")
+
+                    status_out = gr.Textbox(
+                        label="Status",
+                        value="Click Reset to start",
+                        interactive=False,
+                        lines=1,
+                    )
+                    output_out = gr.Code(
+                        label="Raw JSON response",
+                        language="json",
+                        lines=20,
+                    )
+
+                    btn_reset.click(
+                        fn=lambda t: (gradio_reset(t), "Episode reset"),
+                        inputs=[task_sel],
+                        outputs=[output_out, status_out],
+                    )
+                    btn_step.click(
+                        fn=lambda a: (gradio_step(a), "Step executed"),
+                        inputs=[action_in],
+                        outputs=[output_out, status_out],
+                    )
+                    btn_state.click(
+                        fn=lambda: (gradio_state(), "State fetched"),
+                        outputs=[output_out, status_out],
+                    )
+
+        with gr.Tab("Grader"):
+            gr.Markdown("### Get grader score for current episode")
+            btn_grade = gr.Button("Get Grader Score", variant="primary")
+            grade_out = gr.Code(label="Grader response", language="json", lines=10)
+            btn_grade.click(fn=gradio_grader, outputs=[grade_out])
+
+        with gr.Tab("Baseline"):
+            gr.Markdown("### Run the rule-based baseline agent on all 3 tasks")
+            btn_base = gr.Button("Run Baseline", variant="primary")
+            base_out = gr.Code(label="Baseline scores", language="json", lines=15)
+            btn_base.click(fn=gradio_baseline, outputs=[base_out])
+
+        with gr.Tab("README"):
+            gr.Markdown("""
+## Bug Triage OpenEnv
+
+Real-world GitHub issue triage environment for AI agents.
+
+## Tasks
+| Task | Difficulty | Issues | Max Steps |
+|------|-----------|--------|-----------|
+| task_1_easy | Easy | 5 | 10 |
+| task_2_medium | Medium | 6 | 20 |
+| task_3_hard | Hard | 8 | 35 |
+
+## Baseline Scores
+| Task | Score |
+|------|-------|
+| task_1_easy | 0.74 |
+| task_2_medium | 0.61 |
+| task_3_hard | 0.43 |
+
+## Action Space
+`label` · `prioritize` · `assign` · `close` · `request_info` · `skip`
+            """)
+
+# Mount Gradio at root so HF App tab shows it
+app = gr.mount_gradio_app(app, demo, path="/")
+
 
 @app.get("/api")
 def api_root():
     return {"status": "ok", "env": "bug-triage-openenv", "version": "1.0.0"}
 
+
+@app.get("/ui")
+def ui():
+    return HTMLResponse(content=HTML)
+
+
 @app.get("/web")
 def web():
     return HTMLResponse(content=HTML)
+
 
 @app.get("/health")
 def health():
