@@ -3,10 +3,6 @@ from fastapi.responses import HTMLResponse
 from app.environment import BugTriageEnv
 from app.models import Action
 from app.tasks import TASKS, GRADERS, make_tasks
-import gradio as gr
-import httpx
-import json
-import os
 
 app = FastAPI(
     title="Bug Triage OpenEnv",
@@ -168,198 +164,14 @@ function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').
 </html>"""
 
 
-# ── Gradio playground (shows in HF App tab) ───────────────────────────────────
-
-STEP_EXAMPLE = '''{
-  "action_type": "label",
-  "label": "bug",
-  "issue_id": "i1"
-}'''
-
-CONNECT_CODE = '''import httpx
-
-BASE = "https://drishti1976-bug-triage-env.hf.space"
-
-obs = httpx.post(f"{BASE}/reset", params={"task_id": "task_1_easy"}).json()
-result = httpx.post(f"{BASE}/step", json={
-    "action_type": "label",
-    "label": "bug",
-    "issue_id": obs["current_issue"]["id"]
-}).json()
-print(result["reward"])'''
-
-
-def gradio_reset(task_id):
-    try:
-        r = httpx.post(
-            "http://localhost:7860/reset",
-            params={"task_id": task_id},
-            timeout=30
-        )
-        return json.dumps(r.json(), indent=2)
-    except Exception as e:
-        return f"Error: {e}"
-
-
-def gradio_step(action_json):
-    try:
-        action = json.loads(action_json)
-        r = httpx.post(
-            "http://localhost:7860/step",
-            json=action,
-            timeout=30
-        )
-        return json.dumps(r.json(), indent=2)
-    except Exception as e:
-        return f"Error: {e}"
-
-
-def gradio_state():
-    try:
-        r = httpx.get("http://localhost:7860/state", timeout=30)
-        return json.dumps(r.json(), indent=2)
-    except Exception as e:
-        return f"Error: {e}"
-
-
-def gradio_grader():
-    try:
-        r = httpx.get("http://localhost:7860/grader", timeout=30)
-        return json.dumps(r.json(), indent=2)
-    except Exception as e:
-        return f"Error: {e}"
-
-
-def gradio_baseline():
-    try:
-        r = httpx.get("http://localhost:7860/baseline", timeout=60)
-        return json.dumps(r.json(), indent=2)
-    except Exception as e:
-        return f"Error: {e}"
-
-
-with gr.Blocks(
-    title="Bug Triage OpenEnv",
-    theme=gr.themes.Base(primary_hue="green", neutral_hue="slate"),
-    css="footer{display:none!important}"
-) as demo:
-
-    gr.Markdown("# OpenEnv Agentic Environment: bug_triage_env")
-
-    with gr.Tabs():
-
-        with gr.Tab("Playground"):
-            gr.Markdown("### Click Reset to start a new episode.")
-            with gr.Row():
-                with gr.Column(scale=1):
-                    gr.Markdown("**Connect to this environment**")
-                    gr.Markdown("Connect directly to a running server:")
-                    gr.Code(value=CONNECT_CODE, language="python",
-                            label="Python client")
-                    gr.Markdown("**Available tasks:**")
-                    gr.Markdown(
-                        "- `task_1_easy` — Label 5 issues (Easy)\n"
-                        "- `task_2_medium` — Label + Priority + Team (Medium)\n"
-                        "- `task_3_hard` — Full triage (Hard)"
-                    )
-                    gr.Markdown("**Action types:**")
-                    gr.Markdown(
-                        "`label` · `prioritize` · `assign` · "
-                        "`close` · `request_info` · `skip`"
-                    )
-
-                with gr.Column(scale=2):
-                    gr.Markdown("### Playground")
-                    task_sel = gr.Dropdown(
-                        choices=["task_1_easy", "task_2_medium", "task_3_hard"],
-                        value="task_1_easy",
-                        label="Select Task",
-                    )
-                    action_in = gr.Textbox(
-                        label="Action JSON",
-                        value=STEP_EXAMPLE,
-                        lines=6,
-                    )
-                    with gr.Row():
-                        btn_step  = gr.Button("Step",      variant="primary")
-                        btn_reset = gr.Button("Reset",     variant="secondary")
-                        btn_state = gr.Button("Get state", variant="secondary")
-
-                    status_out = gr.Textbox(
-                        label="Status",
-                        value="Click Reset to start",
-                        interactive=False,
-                        lines=1,
-                    )
-                    output_out = gr.Code(
-                        label="Raw JSON response",
-                        language="json",
-                        lines=20,
-                    )
-
-                    btn_reset.click(
-                        fn=lambda t: (gradio_reset(t), "Episode reset"),
-                        inputs=[task_sel],
-                        outputs=[output_out, status_out],
-                    )
-                    btn_step.click(
-                        fn=lambda a: (gradio_step(a), "Step executed"),
-                        inputs=[action_in],
-                        outputs=[output_out, status_out],
-                    )
-                    btn_state.click(
-                        fn=lambda: (gradio_state(), "State fetched"),
-                        outputs=[output_out, status_out],
-                    )
-
-        with gr.Tab("Grader"):
-            gr.Markdown("### Get grader score for current episode")
-            btn_grade = gr.Button("Get Grader Score", variant="primary")
-            grade_out = gr.Code(label="Grader response", language="json", lines=10)
-            btn_grade.click(fn=gradio_grader, outputs=[grade_out])
-
-        with gr.Tab("Baseline"):
-            gr.Markdown("### Run the rule-based baseline agent on all 3 tasks")
-            btn_base = gr.Button("Run Baseline", variant="primary")
-            base_out = gr.Code(label="Baseline scores", language="json", lines=15)
-            btn_base.click(fn=gradio_baseline, outputs=[base_out])
-
-        with gr.Tab("README"):
-            gr.Markdown("""
-## Bug Triage OpenEnv
-
-Real-world GitHub issue triage environment for AI agents.
-
-## Tasks
-| Task | Difficulty | Issues | Max Steps |
-|------|-----------|--------|-----------|
-| task_1_easy | Easy | 5 | 10 |
-| task_2_medium | Medium | 6 | 20 |
-| task_3_hard | Hard | 8 | 35 |
-
-## Baseline Scores
-| Task | Score |
-|------|-------|
-| task_1_easy | 0.74 |
-| task_2_medium | 0.61 |
-| task_3_hard | 0.43 |
-
-## Action Space
-`label` · `prioritize` · `assign` · `close` · `request_info` · `skip`
-            """)
-
-# Mount Gradio at root so HF App tab shows it
-app = gr.mount_gradio_app(app, demo, path="/")
+@app.get("/")
+def root():
+    return HTMLResponse(content=HTML)
 
 
 @app.get("/api")
 def api_root():
     return {"status": "ok", "env": "bug-triage-openenv", "version": "1.0.0"}
-
-
-@app.get("/ui")
-def ui():
-    return HTMLResponse(content=HTML)
 
 
 @app.get("/web")
