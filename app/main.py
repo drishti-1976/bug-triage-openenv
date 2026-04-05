@@ -338,8 +338,7 @@ function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;'
 
 @app.get("/")
 def root():
-    return {"status": "ok", "env": "bug-triage-openenv", "version": "1.0.0"}
-
+    return HTMLResponse(content=HTML)
 
 @app.get("/api")
 def api_root():
