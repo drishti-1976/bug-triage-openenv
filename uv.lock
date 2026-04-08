@@ -1,0 +1,18 @@
+version = 1
+requires-python = ">=3.11"
+
+[[package]]
+name = "bug-triage-openenv"
+version = "1.0.0"
+source = { virtual = "." }
+dependencies = [
+  { name = "fastapi" },
+  { name = "uvicorn" },
+  { name = "pydantic" },
+  { name = "openai" },
+  { name = "pyyaml" },
+  { name = "httpx" },
+  { name = "python-dotenv" },
+  { name = "openenv" },
+  { name = "aiofiles" },
+]
