@@ -262,6 +262,11 @@ TASKS = make_tasks()
 
 # ── Graders ───────────────────────────────────────────────────────────────────
 
+def _clamp(score: float) -> float:
+    """Ensure score is strictly within (0, 1) — never exactly 0.0 or 1.0."""
+    return round(min(max(score, 0.001), 0.999), 3)
+
+
 def grade_task_1(
     action_history: List[Dict[str, Any]],
     correct_answers: Dict = None
@@ -275,9 +280,11 @@ def grade_task_1(
                 scored[iid] = 1.0
             elif iid not in scored:
                 scored[iid] = 0.0
-    return round(
-        sum(scored.get(i, 0.0) for i in correct) / len(correct), 3
-    ) if correct else 0.0
+    raw = (
+        sum(scored.get(i, 0.0) for i in correct) / len(correct)
+        if correct else 0.0
+    )
+    return _clamp(raw)
 
 
 def grade_task_2(
@@ -285,7 +292,6 @@ def grade_task_2(
     correct_answers: Dict = None
 ) -> float:
     correct     = correct_answers or TASKS["task_2_medium"]["correct_answers"]
-    label_score = pri_score = team_score = 0.0
     seen        = {}   # track best per issue
 
     for action in action_history:
@@ -303,18 +309,19 @@ def grade_task_2(
             seen[iid]["team"] = 1.0
 
     n = len(correct)
+    label_score = pri_score = team_score = 0.0
     for iid in correct:
         s = seen.get(iid, {})
         label_score += s.get("label", 0.0)
         pri_score   += s.get("priority", 0.0)
         team_score  += s.get("team", 0.0)
 
-    return round(
+    raw = (
         (label_score / n) * 0.40 +
         (pri_score   / n) * 0.35 +
-        (team_score  / n) * 0.25,
-        3
+        (team_score  / n) * 0.25
     )
+    return _clamp(raw)
 
 
 def grade_task_3(
@@ -357,14 +364,14 @@ def grade_task_3(
     close_score = (len(closed)     / len(duplicate_ids) if duplicate_ids else 1.0)
     info_score  = (len(info_asked) / len(vague_ids)     if vague_ids     else 1.0)
 
-    return round(
+    raw = (
         label_score * 0.25 +
         pri_score   * 0.25 +
         team_score  * 0.20 +
         close_score * 0.15 +
-        info_score  * 0.15,
-        3
+        info_score  * 0.15
     )
+    return _clamp(raw)
 
 
 GRADERS = {
