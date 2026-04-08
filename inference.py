@@ -1,63 +1,85 @@
 """
-inference.py — Bug Triage OpenEnv baseline inference script
+inference.py — Bug Triage OpenEnv
 MANDATORY env vars: API_BASE_URL, MODEL_NAME, HF_TOKEN
 """
-import os, sys, json, time
+
+import os
+import json
+import time
+import sys
 import httpx
 from openai import OpenAI
 
-# ── Required env vars (as specified in problem statement) ─────────────────────
+# ── Mandatory env vars ────────────────────────────────────────────────────────
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
-HF_TOKEN     = os.getenv("HF_TOKEN")     or os.getenv("API_KEY")
+MODEL_NAME   = os.getenv("MODEL_NAME",   "Qwen/Qwen2.5-72B-Instruct")
+HF_TOKEN     = os.getenv("HF_TOKEN")    or os.getenv("API_KEY", "no-key")
 ENV_BASE_URL = os.getenv("ENV_BASE_URL", "https://drishti1976-bug-triage-env.hf.space")
 
-# ── OpenAI client using required variables ────────────────────────────────────
+# ── OpenAI client ─────────────────────────────────────────────────────────────
 client = OpenAI(
     base_url = API_BASE_URL,
-    api_key  = HF_TOKEN or "no-key",
+    api_key  = HF_TOKEN,
 )
 
-TASK_TIME_LIMIT = 360   # 6 min per task = 18 min total, safely under 20 min
+TASK_TIME_LIMIT = 360
+MAX_STEPS       = 40
 
 
-def reset_env(task_id: str):
-    return httpx.post(
+# ── Environment helpers ───────────────────────────────────────────────────────
+
+def reset_env(task_id: str) -> dict:
+    r = httpx.post(
         f"{ENV_BASE_URL}/reset",
         params={"task_id": task_id},
         timeout=30
-    ).json()
+    )
+    return r.json()
 
 
-def step_env(action: dict):
-    return httpx.post(
+def step_env(action: dict) -> dict:
+    r = httpx.post(
         f"{ENV_BASE_URL}/step",
         json=action,
         timeout=30
-    ).json()
+    )
+    return r.json()
 
 
-def get_grade():
-    return httpx.get(f"{ENV_BASE_URL}/grader", timeout=30).json()
+def get_grade() -> dict:
+    r = httpx.get(f"{ENV_BASE_URL}/grader", timeout=30)
+    return r.json()
 
 
-def run_episode(task_id: str) -> float:
-    obs        = reset_env(task_id)
-    done       = False
-    step_count = 0
-    start_time = time.time()
+# ── LLM call ─────────────────────────────────────────────────────────────────
 
-    while not done and step_count < 40:
-        # Hard time cap — keeps total runtime under 20 min
-        if time.time() - start_time > TASK_TIME_LIMIT:
-            print(f"  Time limit reached for {task_id}")
-            break
+def call_llm(prompt: str) -> str:
+    try:
+        completion = client.chat.completions.create(
+            model       = MODEL_NAME,
+            messages    = [{"role": "user", "content": prompt}],
+            temperature = 0.0,
+            max_tokens  = 300,
+        )
+        return completion.choices[0].message.content or ""
+    except Exception as e:
+        return ""
 
-        issue = obs.get("current_issue")
-        if not issue:
-            break
 
-        prompt = f"""You are a GitHub issue triage agent. Analyse this issue and respond with ONE JSON action.
+def parse_action(response: str, issue_id: str) -> dict:
+    try:
+        raw = response.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        return json.loads(raw.strip())
+    except Exception:
+        return {"action_type": "skip", "issue_id": issue_id}
+
+
+def build_prompt(issue: dict, obs: dict) -> str:
+    return f"""You are a GitHub issue triage agent. Analyse this issue and respond with ONE JSON action.
 
 Issue ID: {issue['id']}
 Title: {issue['title']}
@@ -71,83 +93,138 @@ Task: {obs['task_description']}
 Step budget remaining: {obs['step_budget_remaining']}
 
 Respond ONLY with valid JSON:
-- action_type: "label" | "prioritize" | "assign" | "close" | "request_info" | "skip"
-- label: "bug" | "feature" | "question" | "duplicate" | "security"  (if labelling)
-- priority: "critical" | "high" | "medium" | "low"  (if prioritizing)
-- team: "backend" | "frontend" | "devops" | "security" | "docs"  (if assigning)
-- close_reason: "duplicate" | "invalid" | "wontfix"  (if closing)
-- request_text: your message asking for info  (if requesting info)
-- issue_id: "{issue['id']}"
+{{
+  "action_type": "label" | "prioritize" | "assign" | "close" | "request_info" | "skip",
+  "label": "bug" | "feature" | "question" | "duplicate" | "security",
+  "priority": "critical" | "high" | "medium" | "low",
+  "team": "backend" | "frontend" | "devops" | "security" | "docs",
+  "close_reason": "duplicate" | "invalid" | "wontfix",
+  "request_text": "your message",
+  "issue_id": "{issue['id']}"
+}}"""
 
-JSON only, no explanation:"""
 
-        try:
-            completion = client.chat.completions.create(
-                model       = MODEL_NAME,
-                messages    = [{"role": "user", "content": prompt}],
-                temperature = 0.0,
-                max_tokens  = 200,
-            )
-            raw = completion.choices[0].message.content.strip()
-            if raw.startswith("```"):
-                raw = raw.split("```")[1]
-                if raw.startswith("json"):
-                    raw = raw[4:]
-            action_dict = json.loads(raw.strip())
-        except Exception as e:
-            print(f"  Parse error: {e} — skipping")
-            action_dict = {"action_type": "skip", "issue_id": issue.get("id", "")}
+# ── Episode runner ────────────────────────────────────────────────────────────
 
-        result     = step_env(action_dict)
+def run_episode(task_id: str) -> float:
+    obs        = reset_env(task_id)
+    done       = False
+    step_count = 0
+    start_time = time.time()
+
+    # ── [START] block ─────────────────────────────────────────────────────────
+    print(f"[START] task={task_id}", flush=True)
+
+    while not done and step_count < MAX_STEPS:
+        if time.time() - start_time > TASK_TIME_LIMIT:
+            print(f"[STEP] step={step_count} reward=0.0 info=timeout", flush=True)
+            break
+
+        issue = obs.get("current_issue")
+        if not issue:
+            break
+
+        # Call LLM or use rule-based fallback if no token
+        if HF_TOKEN == "no-key":
+            action = rule_agent(issue)
+        else:
+            prompt   = build_prompt(issue, obs)
+            response = call_llm(prompt)
+            action   = parse_action(response, issue["id"])
+
+        result     = step_env(action)
+        reward_val = result.get("reward", {}).get("value", 0.0)
         obs        = result.get("observation", obs)
         done       = result.get("done", False)
         step_count += 1
-        time.sleep(0.3)   # gentle rate limiting
 
-    return get_grade().get("grader_score", 0.0)
+        # ── [STEP] block ──────────────────────────────────────────────────────
+        print(
+            f"[STEP] step={step_count} "
+            f"reward={round(reward_val, 3)} "
+            f"action={action.get('action_type')} "
+            f"issue={issue['id']}",
+            flush=True
+        )
 
+        time.sleep(0.2)
+
+    grade = get_grade()
+    score = round(grade.get("grader_score", 0.0), 3)
+
+    # ── [END] block ───────────────────────────────────────────────────────────
+    print(f"[END] task={task_id} score={score} steps={step_count}", flush=True)
+
+    return score
+
+
+# ── Rule-based fallback agent ─────────────────────────────────────────────────
+
+def rule_agent(issue: dict) -> dict:
+    text = (issue["title"] + " " + issue["body"] + " " + issue["author"]).lower()
+    if any(w in text for w in ["sql injection", "xss", "vulnerability", "exploit", "security"]):
+        label, priority, team = "security", "critical", "security"
+    elif any(w in text for w in ["crash", "error", "exception", "broken", "not working", "bug", "fail"]):
+        label, priority, team = "bug", "high", "backend"
+    elif any(w in text for w in ["feature request", "add support", "would be great", "please add"]):
+        label, priority, team = "feature", "medium", "backend"
+    elif any(w in text for w in ["how do i", "how to", "documentation", "question"]):
+        label, priority, team = "question", "low", "docs"
+    elif any(w in text for w in ["same as issue", "already reported", "duplicate"]):
+        label, priority, team = "duplicate", "low", None
+    else:
+        label, priority, team = "question", "low", None
+
+    action: dict = {
+        "action_type": "label",
+        "label":       label,
+        "priority":    priority,
+        "issue_id":    issue["id"],
+    }
+    if team:
+        action["team"] = team
+    if label == "duplicate":
+        action["action_type"] = "close"
+        action["close_reason"] = "duplicate"
+    if not issue["has_reproduction_steps"] and not issue["has_stacktrace"] \
+            and label not in ("feature", "question", "duplicate"):
+        action["action_type"] = "request_info"
+        action["request_text"] = (
+            "Could you provide reproduction steps and environment details?"
+        )
+    return action
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    api_mode = "--mode" in sys.argv and sys.argv[sys.argv.index("--mode") + 1] == "api"
+    print("=== Bug Triage OpenEnv — Inference Script ===", flush=True)
+    print(f"API_BASE_URL : {API_BASE_URL}", flush=True)
+    print(f"MODEL_NAME   : {MODEL_NAME}", flush=True)
+    print(f"HF_TOKEN     : {'set' if HF_TOKEN != 'no-key' else 'NOT SET — using rule-based agent'}", flush=True)
+    print(f"ENV_BASE_URL : {ENV_BASE_URL}", flush=True)
+    print("=" * 45, flush=True)
 
-    if not HF_TOKEN:
-        # Fallback scores so the script never errors with no key
-        scores = {
-            "task_1_easy":   0.74,
-            "task_2_medium": 0.61,
-            "task_3_hard":   0.43,
-        }
-        if api_mode:
-            print(json.dumps(scores))
-        else:
-            print("No HF_TOKEN set — using mock baseline scores:")
-            print(json.dumps(scores, indent=2))
-        return
-
-    scores = {}
+    scores     = {}
     total_start = time.time()
 
     for task_id in ["task_1_easy", "task_2_medium", "task_3_hard"]:
-        print(f"\nRunning {task_id}...")
         try:
             score = run_episode(task_id)
-            scores[task_id] = round(score, 3)
-            print(f"  Score: {score:.3f}")
+            scores[task_id] = score
         except Exception as e:
-            print(f"  Error: {e}")
+            print(f"[END] task={task_id} score=0.0 steps=0 error={e}", flush=True)
             scores[task_id] = 0.0
 
-        elapsed = time.time() - total_start
-        print(f"  Total elapsed: {elapsed:.0f}s")
+    print("=" * 45, flush=True)
+    print("=== FINAL RESULTS ===", flush=True)
+    for task_id, score in scores.items():
+        print(f"  {task_id}: {score:.3f}", flush=True)
 
-    if api_mode:
-        print(json.dumps(scores))
-    else:
-        print("\n=== BASELINE RESULTS ===")
-        for t, s in scores.items():
-            print(f"  {t}: {s:.3f}")
-        print(f"  Average: {round(sum(scores.values()) / len(scores), 3):.3f}")
-        print(f"  Total time: {time.time() - total_start:.0f}s")
+    avg = round(sum(scores.values()) / len(scores), 3)
+    print(f"  Average: {avg:.3f}", flush=True)
+    print(f"  Total time: {round(time.time() - total_start)}s", flush=True)
+    print(json.dumps(scores), flush=True)
 
 
 if __name__ == "__main__":
